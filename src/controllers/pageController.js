@@ -26,6 +26,7 @@ export const pageController = {
     const { include_unpublished, parent_id } = req.query;
     
     let pages;
+    console.log("parent_id",parent_id)
     if (parent_id) {
       pages = await Page.findChildren(parent_id);
     } else {

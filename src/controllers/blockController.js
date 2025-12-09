@@ -46,7 +46,6 @@ export const blockController = {
       });
     }
     console.log("blocks",blocks)
-    return;
     const result = await Block.saveBlocks(pageId, blocks);
     
     res.json({

@@ -49,33 +49,41 @@ export class Page {
   }
 
   static async update(id, updates) {
-    // Build dynamic update query
-    const fields = [];
-    const values = [];
+  // Map camelCase field names to snake_case database column names
+  const fieldMappings = {
+    coverImage: 'cover_image'
+    // Add other mappings if needed
+  };
+  
+  // Build dynamic update query
+  const fields = [];
+  const values = [];
+  
+  Object.keys(updates).forEach(key => {
+    const dbColumn = fieldMappings[key] || key;
     
-    Object.keys(updates).forEach(key => {
-      if (key === 'content' && updates[key] !== undefined) {
-        fields.push(`${key} = ?`);
-        values.push(JSON.stringify(updates[key]));
-      } else if (updates[key] !== undefined) {
-        fields.push(`${key} = ?`);
-        values.push(updates[key]);
-      }
-    });
-    
-    if (fields.length === 0) {
-      throw new Error('No fields to update');
+    if (dbColumn === 'content' && updates[key] !== undefined) {
+      fields.push(`${dbColumn} = ?`);
+      values.push(JSON.stringify(updates[key]));
+    } else if (updates[key] !== undefined) {
+      fields.push(`${dbColumn} = ?`);
+      values.push(updates[key]);
     }
-    
-    values.push(id);
-    const query = `UPDATE pages SET ${fields.join(', ')} WHERE id = ?`;
-    
-    await pool.query(query, values);
-    
-    // Return updated record
-    const [rows] = await pool.query('SELECT * FROM pages WHERE id = ?', [id]);
-    return rows[0];
+  });
+  
+  if (fields.length === 0) {
+    throw new Error('No fields to update');
   }
+  
+  values.push(id);
+  const query = `UPDATE pages SET ${fields.join(', ')} WHERE id = ?`;
+  
+  await pool.query(query, values);
+  
+  // Return updated record
+  const [rows] = await pool.query('SELECT * FROM pages WHERE id = ?', [id]);
+  return rows[0];
+}
 
   static async delete(id) {
     const [result] = await pool.query('DELETE FROM pages WHERE id = ?', [id]);

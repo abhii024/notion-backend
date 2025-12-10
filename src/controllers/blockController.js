@@ -16,7 +16,9 @@ export const blockController = {
       });
     }
     
-    const blocks = await Block.findByPageId(pageId);
+    // const blocks = await Block.findByPageId(pageId);
+    const blocks = []
+    
     
     res.json({
       success: true,

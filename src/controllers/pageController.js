@@ -41,12 +41,20 @@ export const pageController = {
     });
   }),
 
-  // Get single page
+  // Get single page by ID or slug
   getPage: asyncHandler(async (req, res) => {
     const { id } = req.params;
     const { include_blocks } = req.query;
     
-    const page = await Page.findById(id);
+    // Check if id is a slug (contains letters or hyphens)
+    let page;
+    if (isNaN(id)) {
+      // It's a slug
+      page = await Page.findBySlug(id);
+    } else {
+      // It's a numeric ID
+      page = await Page.findById(id);
+    }
     
     if (!page) {
       return res.status(404).json({
@@ -57,10 +65,10 @@ export const pageController = {
     
     let data = { page };
     
-    if (include_blocks === 'true') {
-      const blocks = await Block.findByPageId(id);
+    // if (include_blocks === 'true') {
+      const blocks = await Block.findByPageId(page.id);
       data.blocks = blocks;
-    }
+    // }
     
     res.json({
       success: true,
@@ -153,6 +161,33 @@ export const pageController = {
     res.json({
       success: true,
       data: tree
+    });
+  }),
+
+  // Get page by slug
+  getPageBySlug: asyncHandler(async (req, res) => {
+    const { slug } = req.params;
+    const { include_blocks } = req.query;
+    
+    const page = await Page.findBySlug(slug);
+    
+    if (!page) {
+      return res.status(404).json({
+        success: false,
+        error: 'Page not found'
+      });
+    }
+    
+    let data = { page };
+    
+    if (include_blocks === 'true') {
+      const blocks = await Block.findByPageId(page.id);
+      data.blocks = blocks;
+    }
+    
+    res.json({
+      success: true,
+      data
     });
   })
 };

@@ -1,4 +1,3 @@
-
 import mysql from 'mysql2/promise';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
@@ -42,6 +41,7 @@ const initTables = async (connection) => {
       CREATE TABLE IF NOT EXISTS pages (
         id INT AUTO_INCREMENT PRIMARY KEY,
         title VARCHAR(255) NOT NULL DEFAULT 'Untitled',
+        slug VARCHAR(255) NOT NULL UNIQUE,
         content JSON,
         parent_id INT,
         icon VARCHAR(50) DEFAULT '📄',
@@ -71,6 +71,7 @@ const initTables = async (connection) => {
     `);
 
     // Create indexes
+    await connection.query(`CREATE INDEX IF NOT EXISTS idx_pages_slug ON pages(slug)`);
     await connection.query(`CREATE INDEX IF NOT EXISTS idx_pages_parent_id ON pages(parent_id)`);
     await connection.query(`CREATE INDEX IF NOT EXISTS idx_pages_created_at ON pages(created_at DESC)`);
     await connection.query(`CREATE INDEX IF NOT EXISTS idx_blocks_page_id ON blocks(page_id)`);

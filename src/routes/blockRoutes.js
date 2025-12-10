@@ -10,6 +10,9 @@ router.get('/page/:pageId', asyncHandler(blockController.getPageBlocks));
 // POST /api/blocks/page/:pageId - Save blocks for a page
 router.post('/page/:pageId', asyncHandler(blockController.savePageBlocks));
 
+// PUT /api/blocks/page/:pageId - Update all blocks for a page (Ctrl+S)
+router.put('/page/:pageId', asyncHandler(blockController.updatePageBlocks));
+
 // PUT /api/blocks/reorder/:pageId - Reorder blocks
 router.put('/reorder/:pageId', asyncHandler(blockController.reorderBlocks));
 

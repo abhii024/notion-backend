@@ -156,4 +156,36 @@ export const blockController = {
       data: newBlock
     });
   }),
+
+  
+  // Update all blocks for a page (Ctrl+S save)
+  updatePageBlocks: asyncHandler(async (req, res) => {
+    const { pageId } = req.params;
+    const { blocks } = req.body;
+    
+    if (!Array.isArray(blocks)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Blocks must be an array'
+      });
+    }
+    
+    // Check if page exists
+    const page = await Page.findById(pageId);
+    if (!page) {
+      return res.status(404).json({
+        success: false,
+        error: 'Page not found'
+      });
+    }
+    
+    // Use updateBlocks method which preserves block IDs intelligently
+    const result = await Block.updateBlocks(pageId, blocks);
+    
+    res.json({
+      success: true,
+      message: 'Blocks updated successfully',
+      count: result.count
+    });
+  }),
 };

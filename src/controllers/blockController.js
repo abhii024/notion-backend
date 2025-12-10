@@ -120,5 +120,40 @@ export const blockController = {
       success: true,
       message: result.message
     });
-  })
+  }),
+
+  
+  createBlock: asyncHandler(async (req, res) => {
+    const blockData = req.body;
+    
+    // Validate required fields
+    if (!blockData.page_id || !blockData.type) {
+      return res.status(400).json({
+        success: false,
+        error: 'page_id and type are required'
+      });
+    }
+    
+    // Check if page exists
+    const page = await Page.findById(blockData.page_id);
+    if (!page) {
+      return res.status(404).json({
+        success: false,
+        error: 'Page not found'
+      });
+    }
+    
+    // Set default order_index if not provided
+    if (blockData.order_index === undefined) {
+      const [blocks] = await Block.findByPageId(blockData.page_id);
+      blockData.order_index = blocks.length;
+    }
+    
+    const newBlock = await Block.create(blockData);
+    
+    res.status(201).json({
+      success: true,
+      data: newBlock
+    });
+  }),
 };

@@ -13,10 +13,13 @@ router.post('/page/:pageId', asyncHandler(blockController.savePageBlocks));
 // PUT /api/blocks/reorder/:pageId - Reorder blocks
 router.put('/reorder/:pageId', asyncHandler(blockController.reorderBlocks));
 
-// PUT /api/blocks/:id - Update a block
+// PUT /api/blocks/:id - Update a single block
 router.put('/:id', asyncHandler(blockController.updateBlock));
 
 // DELETE /api/blocks/:id - Delete a block
 router.delete('/:id', asyncHandler(blockController.deleteBlock));
+
+// POST /api/blocks/create - Create a new block
+router.post('/create', asyncHandler(blockController.createBlock));
 
 export default router;

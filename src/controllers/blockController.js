@@ -45,7 +45,6 @@ export const blockController = {
         error: 'Page not found'
       });
     }
-    console.log("blocks",blocks)
     const result = await Block.saveBlocks(pageId, blocks);
     
     res.json({

@@ -27,10 +27,11 @@ export const pageController = {
     
     let pages;
     console.log("parent_id",parent_id)
+    console.log("parent_id",include_unpublished)
     if (parent_id) {
       pages = await Page.findChildren(parent_id);
     } else {
-      pages = await Page.findAll(include_unpublished === 'true');
+      pages = await Page.findAll();
     }
     
     res.json({
@@ -103,7 +104,7 @@ export const pageController = {
     }
     
     // Also delete associated blocks
-    await Block.deleteByPageId(id);
+    // await Block.deleteByPageId(id);
     
     res.json({
       success: true,

@@ -1,3 +1,4 @@
+
 import mysql from 'mysql2/promise';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
@@ -36,13 +37,13 @@ export const testConnection = async () => {
 // Initialize database tables with MySQL syntax
 const initTables = async (connection) => {
   try {
-    // Create pages table
+    // Create pages table - using DEFAULT (UUID()) for MySQL
     await connection.query(`
       CREATE TABLE IF NOT EXISTS pages (
-        id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
+        id INT AUTO_INCREMENT PRIMARY KEY,
         title VARCHAR(255) NOT NULL DEFAULT 'Untitled',
         content JSON,
-        parent_id CHAR(36),
+        parent_id INT,
         icon VARCHAR(50) DEFAULT '📄',
         cover_image TEXT,
         is_published BOOLEAN DEFAULT TRUE,
@@ -55,12 +56,12 @@ const initTables = async (connection) => {
     // Create blocks table
     await connection.query(`
       CREATE TABLE IF NOT EXISTS blocks (
-        id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
-        page_id CHAR(36) NOT NULL,
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        page_id INT NOT NULL,
         type VARCHAR(50) NOT NULL,
         properties JSON,
         format JSON,
-        parent_id CHAR(36),
+        parent_id INT,
         order_index INT NOT NULL DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

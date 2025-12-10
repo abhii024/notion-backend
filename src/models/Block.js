@@ -1,18 +1,19 @@
 import { pool } from '../config/database.js';
-import { v4 as uuidv4 } from 'uuid';
 import crypto from 'crypto';
 
 export class Block {
   static async create(blockData) {
-    const id = blockData.id || crypto.randomUUID();
+  const connection = await pool.getConnection();
+  
+  try {
+    await connection.beginTransaction();
     
     const query = `
-      INSERT INTO blocks (id, page_id, type, properties, format, parent_id, order_index)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO blocks (page_id, type, properties, format, parent_id, order_index)
+      VALUES (?, ?, ?, ?, ?, ?)
     `;
     
     const values = [
-      id,
       blockData.page_id,
       blockData.type,
       JSON.stringify(blockData.properties || {}),
@@ -21,12 +22,21 @@ export class Block {
       blockData.order_index || 0
     ];
 
-    const [result] = await pool.query(query, values);
+    const [result] = await connection.query(query, values);
+    const newId = result.insertId; 
     
-    // Get the inserted record
-    const [rows] = await pool.query('SELECT * FROM blocks WHERE id = ?', [id]);
+    await connection.commit();
+    
+    const [rows] = await connection.query('SELECT * FROM blocks WHERE id = ?', [newId]);
     return rows[0];
+    
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
   }
+}
 
   static async findByPageId(pageId) {
     const [rows] = await pool.query(
@@ -106,36 +116,33 @@ export class Block {
       // First, delete existing blocks for this page
       await connection.query('DELETE FROM blocks WHERE page_id = ?', [pageId]);
       
-      // Then insert new blocks in order
+      // Then insert new blocks in order (without providing IDs)
       for (let i = 0; i < blocks.length; i++) {
         const block = blocks[i];
-        const blockData = {
-          id: block.id || crypto.randomUUID(),
-          page_id: pageId,
-          type: block.type,
-          properties: block.properties || {},
-          format: block.format || {},
-          parent_id: block.parent_id || null,
-          order_index: i
-        };
         
         await connection.query(
-          `INSERT INTO blocks (id, page_id, type, properties, format, parent_id, order_index)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO blocks (page_id, type, properties, format, parent_id, order_index)
+           VALUES (?, ?, ?, ?, ?, ?)`,
           [
-            blockData.id,
-            blockData.page_id,
-            blockData.type,
-            JSON.stringify(blockData.properties),
-            JSON.stringify(blockData.format),
-            blockData.parent_id,
-            blockData.order_index
+            pageId,
+            block.type,
+            JSON.stringify(block.properties || {}),
+            JSON.stringify(block.format || {}),
+            block.parent_id || null,
+            i
           ]
         );
       }
       
       await connection.commit();
-      return { success: true, count: blocks.length };
+      
+      // Get all newly created blocks
+      const [newBlocks] = await connection.query(
+        'SELECT * FROM blocks WHERE page_id = ? ORDER BY order_index ASC',
+        [pageId]
+      );
+      
+      return { success: true, count: blocks.length, blocks: newBlocks };
     } catch (error) {
       await connection.rollback();
       throw error;
@@ -173,51 +180,58 @@ export class Block {
       // Insert or update blocks
       for (let i = 0; i < blocks.length; i++) {
         const block = blocks[i];
-        const blockData = {
-          id: block.id || crypto.randomUUID(),
-          page_id: pageId,
-          type: block.type,
-          properties: block.properties || {},
-          format: block.format || {},
-          parent_id: block.parent_id || null,
-          order_index: i
-        };
         
-        // Check if block exists
-        const [existing] = await connection.query(
-          'SELECT id FROM blocks WHERE id = ? AND page_id = ?',
-          [blockData.id, pageId]
-        );
-        
-        if (existing.length > 0) {
-          // Update existing block
-          await connection.query(
-            `UPDATE blocks 
-             SET type = ?, properties = ?, format = ?, parent_id = ?, order_index = ?
-             WHERE id = ? AND page_id = ?`,
-            [
-              blockData.type,
-              JSON.stringify(blockData.properties),
-              JSON.stringify(blockData.format),
-              blockData.parent_id,
-              blockData.order_index,
-              blockData.id,
-              pageId
-            ]
+        if (block.id) {
+          // Check if block exists
+          const [existing] = await connection.query(
+            'SELECT id FROM blocks WHERE id = ? AND page_id = ?',
+            [block.id, pageId]
           );
+          
+          if (existing.length > 0) {
+            // Update existing block
+            await connection.query(
+              `UPDATE blocks 
+               SET type = ?, properties = ?, format = ?, parent_id = ?, order_index = ?
+               WHERE id = ? AND page_id = ?`,
+              [
+                block.type,
+                JSON.stringify(block.properties || {}),
+                JSON.stringify(block.format || {}),
+                block.parent_id || null,
+                i,
+                block.id,
+                pageId
+              ]
+            );
+          } else {
+            // Insert block with provided ID
+            await connection.query(
+              `INSERT INTO blocks (id, page_id, type, properties, format, parent_id, order_index)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`,
+              [
+                block.id,
+                pageId,
+                block.type,
+                JSON.stringify(block.properties || {}),
+                JSON.stringify(block.format || {}),
+                block.parent_id || null,
+                i
+              ]
+            );
+          }
         } else {
-          // Insert new block
+          // Insert new block without ID (database will generate it)
           await connection.query(
-            `INSERT INTO blocks (id, page_id, type, properties, format, parent_id, order_index)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO blocks (page_id, type, properties, format, parent_id, order_index)
+             VALUES (?, ?, ?, ?, ?, ?)`,
             [
-              blockData.id,
-              blockData.page_id,
-              blockData.type,
-              JSON.stringify(blockData.properties),
-              JSON.stringify(blockData.format),
-              blockData.parent_id,
-              blockData.order_index
+              pageId,
+              block.type,
+              JSON.stringify(block.properties || {}),
+              JSON.stringify(block.format || {}),
+              block.parent_id || null,
+              i
             ]
           );
         }

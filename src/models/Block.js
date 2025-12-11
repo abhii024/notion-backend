@@ -131,46 +131,36 @@ export class Block {
   }
 
   static async delete(id) {
-    const connection = await pool.getConnection();
+  const connection = await pool.getConnection();
 
-    try {
-      await connection.beginTransaction();
+  try {
+    await connection.beginTransaction();
 
-      // Get block data before deletion for history
-      const [block] = await connection.query('SELECT * FROM blocks WHERE id = ?', [id]);
+    // Get block data before deletion for history
+    const [block] = await connection.query('SELECT * FROM blocks WHERE id = ?', [id]);
 
-      if (block.length === 0) {
-        throw new Error('Block not found');
-      }
-
-      const [result] = await connection.query('DELETE FROM blocks WHERE id = ?', [id]);
-
-      await connection.commit();
-
-      // Save history AFTER committing
-      setTimeout(async () => {
-        try {
-          await BlockHistory.create({
-            page_id: block[0].page_id,
-            block_id: id,
-            block_data: block[0],
-            operation: 'delete',
-            created_by: 'system'
-          });
-        } catch (historyError) {
-          console.error('Failed to save block history:', historyError);
-        }
-      }, 100);
-
-      return result.affectedRows > 0;
-
-    } catch (error) {
-      await connection.rollback();
-      throw error;
-    } finally {
-      connection.release();
+    if (block.length === 0) {
+      throw new Error('Block not found');
     }
+
+    // Save history BEFORE deletion
+    await connection.query(
+      'INSERT INTO block_history (page_id, block_id, block_data, operation, created_by) VALUES (?, ?, ?, ?, ?)',
+      [block[0].page_id, id, JSON.stringify(block[0]), 'delete', 'system']
+    );
+
+    const [result] = await connection.query('DELETE FROM blocks WHERE id = ?', [id]);
+
+    await connection.commit();
+    return result.affectedRows > 0;
+
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
   }
+}
 
   // Save blocks with history
   static async saveBlocks(pageId, blocks, userId = 'system', saveSnapshot = true) {
@@ -387,4 +377,5 @@ export class Block {
       connection.release();
     }
   }
+  
 }

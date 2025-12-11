@@ -1,7 +1,7 @@
 import { Page } from '../models/Page.js';
 import { Block } from '../models/Block.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
-
+import { BlockHistory } from '../models/BlockHistory.js';
 export const pageController = {
   // Create a new page
   createPage: asyncHandler(async (req, res) => {
@@ -45,6 +45,7 @@ export const pageController = {
   getPage: asyncHandler(async (req, res) => {
     const { id } = req.params;
     const { include_blocks } = req.query;
+    const { historyId } = req.query;
     
     // Check if id is a slug (contains letters or hyphens)
     let page;
@@ -65,10 +66,17 @@ export const pageController = {
     
     let data = { page };
     
-    // if (include_blocks === 'true') {
+    if (historyId) {
+      // Implement logic to fetch and include history based on historyId
+      const pageData = await BlockHistory.getPageAtHistory(page.id, historyId);
+      console.log("pageData", pageData?.blocks)
+      data.blocks = pageData?.blocks || [];
+    }
+    else {
       const blocks = await Block.findByPageId(page.id);
+      console.log("blocks", blocks)
       data.blocks = blocks;
-    // }
+    }
     
     res.json({
       success: true,

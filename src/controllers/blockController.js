@@ -16,9 +16,7 @@ export const blockController = {
       });
     }
     
-    // const blocks = await Block.findByPageId(pageId);
-    const blocks = []
-    
+    const blocks = await Block.findByPageId(pageId);
     
     res.json({
       success: true,
@@ -27,10 +25,10 @@ export const blockController = {
     });
   }),
 
-  // Save blocks for a page
+  // Save blocks for a page (with optimized transactions)
   savePageBlocks: asyncHandler(async (req, res) => {
     const { pageId } = req.params;
-    const { blocks } = req.body;
+    const { blocks, saveHistory = true } = req.body;
     
     if (!Array.isArray(blocks)) {
       return res.status(400).json({
@@ -47,11 +45,12 @@ export const blockController = {
         error: 'Page not found'
       });
     }
-    const result = await Block.saveBlocks(pageId, blocks);
+    
+    const result = await Block.saveBlocks(pageId, blocks, 'user', saveHistory);
     
     res.json({
       success: true,
-      message: result.message,
+      message: 'Blocks saved successfully',
       count: result.count
     });
   }),
@@ -116,15 +115,29 @@ export const blockController = {
       });
     }
     
-    const result = await Block.reorderBlocks(pageId, blockIds);
+    // This is a simplified version - you might need to implement this differently
+    // based on how you want to handle reordering with history
+    const blocks = await Block.findByPageId(pageId);
+    
+    // Reorder blocks based on provided IDs
+    const reorderedBlocks = blockIds.map((blockId, index) => {
+      const block = blocks.find(b => b.id === blockId);
+      if (block) {
+        return { ...block, order_index: index };
+      }
+      return null;
+    }).filter(Boolean);
+    
+    // Save reordered blocks
+    const result = await Block.saveBlocks(pageId, reorderedBlocks, 'user', false);
     
     res.json({
       success: true,
-      message: result.message
+      message: 'Blocks reordered successfully'
     });
   }),
 
-  
+  // Create a single block (optimized)
   createBlock: asyncHandler(async (req, res) => {
     const blockData = req.body;
     
@@ -147,7 +160,7 @@ export const blockController = {
     
     // Set default order_index if not provided
     if (blockData.order_index === undefined) {
-      const [blocks] = await Block.findByPageId(blockData.page_id);
+      const blocks = await Block.findByPageId(blockData.page_id);
       blockData.order_index = blocks.length;
     }
     
@@ -159,9 +172,39 @@ export const blockController = {
     });
   }),
 
-  
-  // Update all blocks for a page (Ctrl+S save)
+  // Update all blocks for a page (Ctrl+S save) - optimized
   updatePageBlocks: asyncHandler(async (req, res) => {
+    const { pageId } = req.params;
+    const { blocks, saveHistory = true } = req.body;
+    
+    if (!Array.isArray(blocks)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Blocks must be an array'
+      });
+    }
+    
+    // Check if page exists
+    const page = await Page.findById(pageId);
+    if (!page) {
+      return res.status(404).json({
+        success: false,
+        error: 'Page not found'
+      });
+    }
+    
+    // Use optimized updateBlocks method
+    const result = await Block.updateBlocks(pageId, blocks, 'user', saveHistory);
+    
+    res.json({
+      success: true,
+      message: 'Blocks updated successfully',
+      count: result.count
+    });
+  }),
+  
+  // Simple save without history (for internal use)
+  saveBlocksSimple: asyncHandler(async (req, res) => {
     const { pageId } = req.params;
     const { blocks } = req.body;
     
@@ -181,13 +224,44 @@ export const blockController = {
       });
     }
     
-    // Use updateBlocks method which preserves block IDs intelligently
-    const result = await Block.updateBlocks(pageId, blocks);
+    const connection = await pool.getConnection();
     
-    res.json({
-      success: true,
-      message: 'Blocks updated successfully',
-      count: result.count
-    });
-  }),
+    try {
+      await connection.beginTransaction();
+      
+      // Delete existing blocks
+      await connection.query('DELETE FROM blocks WHERE page_id = ?', [pageId]);
+      
+      // Insert new blocks
+      for (let i = 0; i < blocks.length; i++) {
+        const block = blocks[i];
+        
+        await connection.query(
+          `INSERT INTO blocks (page_id, type, properties, format, parent_id, order_index)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [
+            pageId,
+            block.type,
+            JSON.stringify(block.properties || {}),
+            JSON.stringify(block.format || {}),
+            block.parent_id || null,
+            i
+          ]
+        );
+      }
+      
+      await connection.commit();
+      
+      res.json({
+        success: true,
+        message: 'Blocks saved successfully',
+        count: blocks.length
+      });
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  })
 };

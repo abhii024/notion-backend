@@ -1,5 +1,5 @@
 import { pool } from '../config/database.js';
-import crypto from 'crypto';
+import { BlockHistory } from './BlockHistory.js';
 
 export class Block {
   static async create(blockData) {
@@ -9,9 +9,9 @@ export class Block {
       await connection.beginTransaction();
 
       const query = `
-      INSERT INTO blocks (page_id, type, properties, format, parent_id, order_index)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `;
+        INSERT INTO blocks (page_id, type, properties, format, parent_id, order_index)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `;
 
       const values = [
         blockData.page_id,
@@ -26,6 +26,21 @@ export class Block {
       const newId = result.insertId;
 
       await connection.commit();
+
+      // Save history AFTER committing
+      setTimeout(async () => {
+        try {
+          await BlockHistory.create({
+            page_id: blockData.page_id,
+            block_id: newId,
+            block_data: blockData,
+            operation: 'create',
+            created_by: 'system'
+          });
+        } catch (historyError) {
+          console.error('Failed to save block history:', historyError);
+        }
+      }, 100);
 
       const [rows] = await connection.query('SELECT * FROM blocks WHERE id = ?', [newId]);
       return rows[0];
@@ -46,58 +61,67 @@ export class Block {
     return rows;
   }
 
-  static async findById(id) {
-    const [rows] = await pool.query('SELECT * FROM blocks WHERE id = ?', [id]);
-    return rows[0];
-  }
-
   static async update(id, updates) {
-    const fields = [];
-    const values = [];
-
-    Object.keys(updates).forEach(key => {
-      if ((key === 'properties' || key === 'format') && updates[key] !== undefined) {
-        fields.push(`${key} = ?`);
-        values.push(JSON.stringify(updates[key]));
-      } else if (updates[key] !== undefined) {
-        fields.push(`${key} = ?`);
-        values.push(updates[key]);
-      }
-    });
-
-    if (fields.length === 0) {
-      throw new Error('No fields to update');
-    }
-
-    values.push(id);
-    const query = `UPDATE blocks SET ${fields.join(', ')} WHERE id = ?`;
-
-    await pool.query(query, values);
-
-    const [rows] = await pool.query('SELECT * FROM blocks WHERE id = ?', [id]);
-    return rows[0];
-  }
-
-  static async delete(id) {
-    const [result] = await pool.query('DELETE FROM blocks WHERE id = ?', [id]);
-    return result.affectedRows > 0;
-  }
-
-  static async reorderBlocks(pageId, blocks) {
     const connection = await pool.getConnection();
 
     try {
       await connection.beginTransaction();
 
-      for (let i = 0; i < blocks.length; i++) {
-        await connection.query(
-          'UPDATE blocks SET order_index = ? WHERE id = ? AND page_id = ?',
-          [i, blocks[i].id, pageId]
-        );
+      // Get current block data for history
+      const [currentBlock] = await connection.query(
+        'SELECT * FROM blocks WHERE id = ?',
+        [id]
+      );
+
+      if (currentBlock.length === 0) {
+        throw new Error('Block not found');
       }
 
+      const fields = [];
+      const values = [];
+
+      Object.keys(updates).forEach(key => {
+        if ((key === 'properties' || key === 'format') && updates[key] !== undefined) {
+          fields.push(`${key} = ?`);
+          values.push(JSON.stringify(updates[key]));
+        } else if (updates[key] !== undefined) {
+          fields.push(`${key} = ?`);
+          values.push(updates[key]);
+        }
+      });
+
+      if (fields.length === 0) {
+        throw new Error('No fields to update');
+      }
+
+      values.push(id);
+      const query = `UPDATE blocks SET ${fields.join(', ')} WHERE id = ?`;
+
+      await connection.query(query, values);
+
       await connection.commit();
-      return true;
+
+      // Save history AFTER committing
+      setTimeout(async () => {
+        try {
+          await BlockHistory.create({
+            page_id: currentBlock[0].page_id,
+            block_id: id,
+            block_data: {
+              old: currentBlock[0],
+              new: { ...currentBlock[0], ...updates }
+            },
+            operation: 'update',
+            created_by: 'system'
+          });
+        } catch (historyError) {
+          console.error('Failed to save block history:', historyError);
+        }
+      }, 100);
+
+      const [rows] = await connection.query('SELECT * FROM blocks WHERE id = ?', [id]);
+      return rows[0];
+
     } catch (error) {
       await connection.rollback();
       throw error;
@@ -106,17 +130,65 @@ export class Block {
     }
   }
 
-  // NEW METHOD: Save multiple blocks for a page
-  static async saveBlocks(pageId, blocks) {
+  static async delete(id) {
     const connection = await pool.getConnection();
 
     try {
       await connection.beginTransaction();
 
-      // First, delete existing blocks for this page
+      // Get block data before deletion for history
+      const [block] = await connection.query('SELECT * FROM blocks WHERE id = ?', [id]);
+
+      if (block.length === 0) {
+        throw new Error('Block not found');
+      }
+
+      const [result] = await connection.query('DELETE FROM blocks WHERE id = ?', [id]);
+
+      await connection.commit();
+
+      // Save history AFTER committing
+      setTimeout(async () => {
+        try {
+          await BlockHistory.create({
+            page_id: block[0].page_id,
+            block_id: id,
+            block_data: block[0],
+            operation: 'delete',
+            created_by: 'system'
+          });
+        } catch (historyError) {
+          console.error('Failed to save block history:', historyError);
+        }
+      }, 100);
+
+      return result.affectedRows > 0;
+
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  // Save blocks with history
+  static async saveBlocks(pageId, blocks, userId = 'system', saveSnapshot = true) {
+    const connection = await pool.getConnection();
+
+    try {
+      await connection.beginTransaction();
+
+      // Get current blocks before update
+      const [currentBlocks] = await connection.query(
+        'SELECT * FROM blocks WHERE page_id = ? ORDER BY order_index ASC',
+        [pageId]
+      );
+
+      // Delete existing blocks
       await connection.query('DELETE FROM blocks WHERE page_id = ?', [pageId]);
 
-      // Then insert new blocks in order (without providing IDs)
+      // Insert new blocks
       for (let i = 0; i < blocks.length; i++) {
         const block = blocks[i];
 
@@ -136,6 +208,31 @@ export class Block {
 
       await connection.commit();
 
+      // Save snapshot to history if requested
+      if (saveSnapshot) {
+        setTimeout(async () => {
+          try {
+            await BlockHistory.create({
+              page_id: pageId,
+              block_data: {
+                previous: currentBlocks,
+                current: blocks
+              },
+              snapshot_data: {
+                page_id: pageId,
+                blocks: blocks,
+                saved_at: new Date().toISOString(),
+                user_id: userId
+              },
+              operation: 'snapshot',
+              created_by: userId
+            });
+          } catch (historyError) {
+            console.error('Failed to save snapshot:', historyError);
+          }
+        }, 100);
+      }
+
       // Get all newly created blocks
       const [newBlocks] = await connection.query(
         'SELECT * FROM blocks WHERE page_id = ? ORDER BY order_index ASC',
@@ -151,9 +248,7 @@ export class Block {
     }
   }
 
-  // ALTERNATIVE METHOD: Update blocks intelligently (preserves block IDs)
-  // In Block.js - The updateBlocks method should look like this:
-  static async updateBlocks(pageId, blocks) {
+  static async updateBlocks(pageId, blocks, userId = 'system', saveSnapshot = true) {
     const connection = await pool.getConnection();
 
     try {
@@ -161,7 +256,7 @@ export class Block {
 
       // Get existing blocks for this page
       const [existingBlocks] = await connection.query(
-        'SELECT id FROM blocks WHERE page_id = ?',
+        'SELECT * FROM blocks WHERE page_id = ? ORDER BY order_index ASC',
         [pageId]
       );
 
@@ -185,7 +280,7 @@ export class Block {
         if (block.id) {
           // Check if block exists
           const [existing] = await connection.query(
-            'SELECT id FROM blocks WHERE id = ? AND page_id = ?',
+            'SELECT * FROM blocks WHERE id = ? AND page_id = ?',
             [block.id, pageId]
           );
 
@@ -193,8 +288,8 @@ export class Block {
             // Update existing block
             await connection.query(
               `UPDATE blocks 
-             SET type = ?, properties = ?, format = ?, parent_id = ?, order_index = ?
-             WHERE id = ? AND page_id = ?`,
+               SET type = ?, properties = ?, format = ?, parent_id = ?, order_index = ?
+               WHERE id = ? AND page_id = ?`,
               [
                 block.type,
                 JSON.stringify(block.properties || {}),
@@ -209,7 +304,7 @@ export class Block {
             // Insert block with provided ID
             await connection.query(
               `INSERT INTO blocks (id, page_id, type, properties, format, parent_id, order_index)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+               VALUES (?, ?, ?, ?, ?, ?, ?)`,
               [
                 block.id,
                 pageId,
@@ -222,10 +317,10 @@ export class Block {
             );
           }
         } else {
-          // Insert new block without ID (database will generate it)
+          // Insert new block without ID
           const [result] = await connection.query(
             `INSERT INTO blocks (page_id, type, properties, format, parent_id, order_index)
-           VALUES (?, ?, ?, ?, ?, ?)`,
+             VALUES (?, ?, ?, ?, ?, ?)`,
             [
               pageId,
               block.type,
@@ -236,14 +331,45 @@ export class Block {
             ]
           );
 
-          // Store the new ID back in the block object for response
           block.id = result.insertId;
         }
       }
 
       await connection.commit();
 
-      // Get updated blocks
+      // Save history AFTER committing to avoid deadlocks
+      try {
+        // Get updated blocks for history
+        const [updatedBlocks] = await connection.query(
+          'SELECT * FROM blocks WHERE page_id = ? ORDER BY order_index ASC',
+          [pageId]
+        );
+
+        // Save snapshot to history if requested
+        if (saveSnapshot) {
+          await BlockHistory.create({
+            page_id: pageId,
+            block_data: {
+              previous: existingBlocks,
+              current: updatedBlocks
+            },
+            snapshot_data: {
+              page_id: pageId,
+              blocks: updatedBlocks,
+              saved_at: new Date().toISOString(),
+              user_id: userId,
+              change_count: blocks.length - existingBlocks.length
+            },
+            operation: 'snapshot',
+            created_by: userId
+          });
+        }
+      } catch (historyError) {
+        console.error('Failed to save history (non-critical):', historyError);
+        // Don't throw - history is important but shouldn't break the main operation
+      }
+
+      // Get updated blocks for response
       const [updatedBlocks] = await connection.query(
         'SELECT * FROM blocks WHERE page_id = ? ORDER BY order_index ASC',
         [pageId]

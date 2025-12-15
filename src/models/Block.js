@@ -8,17 +8,22 @@ export class Block {
     try {
       await connection.beginTransaction();
 
+      // Require user_id
+      if (!blockData.user_id) {
+        throw new Error('user_id is required');
+      }
+
       const query = `
-        INSERT INTO blocks (page_id, type, properties, format, parent_id, order_index)
+        INSERT INTO blocks (user_id, page_id, type, properties, format, order_index)
         VALUES (?, ?, ?, ?, ?, ?)
       `;
 
       const values = [
+        blockData.user_id,
         blockData.page_id,
         blockData.type,
         JSON.stringify(blockData.properties || {}),
         JSON.stringify(blockData.format || {}),
-        blockData.parent_id || null,
         blockData.order_index || 0
       ];
 
@@ -27,15 +32,16 @@ export class Block {
 
       await connection.commit();
 
-      // Save history AFTER committing
+      // Save history
       setTimeout(async () => {
         try {
           await BlockHistory.create({
+            user_id: blockData.user_id,
             page_id: blockData.page_id,
             block_id: newId,
             block_data: blockData,
             operation: 'create',
-            created_by: 'system'
+            created_by: blockData.user_id
           });
         } catch (historyError) {
           console.error('Failed to save block history:', historyError);
@@ -53,30 +59,41 @@ export class Block {
     }
   }
 
-  static async findByPageId(pageId) {
-    const [rows] = await pool.query(
-      'SELECT * FROM blocks WHERE page_id = ? ORDER BY order_index ASC',
-      [pageId]
-    );
+  static async findByPageId(pageId, userId = null) {
+    let query = 'SELECT * FROM blocks WHERE page_id = ?';
+    const params = [pageId];
+    
+    if (userId) {
+      query += ' AND user_id = ?';
+      params.push(userId);
+    }
+    
+    query += ' ORDER BY order_index ASC';
+    const [rows] = await pool.query(query, params);
     return rows;
   }
 
-  static async update(id, updates) {
+  static async update(id, updates, userId = null) {
     const connection = await pool.getConnection();
 
     try {
       await connection.beginTransaction();
 
-      // Get current block data for history
-      const [currentBlock] = await connection.query(
-        'SELECT * FROM blocks WHERE id = ?',
-        [id]
-      );
+      let query = 'SELECT * FROM blocks WHERE id = ?';
+      const params = [id];
+      
+      if (userId) {
+        query += ' AND user_id = ?';
+        params.push(userId);
+      }
+
+      const [currentBlock] = await connection.query(query, params);
 
       if (currentBlock.length === 0) {
         throw new Error('Block not found');
       }
 
+      const block = currentBlock[0];
       const fields = [];
       const values = [];
 
@@ -95,24 +112,29 @@ export class Block {
       }
 
       values.push(id);
-      const query = `UPDATE blocks SET ${fields.join(', ')} WHERE id = ?`;
+      if (userId) {
+        values.unshift(userId);
+        query = `UPDATE blocks SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`;
+      } else {
+        query = `UPDATE blocks SET ${fields.join(', ')} WHERE id = ?`;
+      }
 
       await connection.query(query, values);
-
       await connection.commit();
 
-      // Save history AFTER committing
+      // Save history
       setTimeout(async () => {
         try {
           await BlockHistory.create({
-            page_id: currentBlock[0].page_id,
+            user_id: block.user_id,
+            page_id: block.page_id,
             block_id: id,
             block_data: {
-              old: currentBlock[0],
-              new: { ...currentBlock[0], ...updates }
+              old: block,
+              new: { ...block, ...updates }
             },
             operation: 'update',
-            created_by: 'system'
+            created_by: block.user_id
           });
         } catch (historyError) {
           console.error('Failed to save block history:', historyError);
@@ -130,67 +152,84 @@ export class Block {
     }
   }
 
-  static async delete(id) {
-  const connection = await pool.getConnection();
-
-  try {
-    await connection.beginTransaction();
-
-    // Get block data before deletion for history
-    const [block] = await connection.query('SELECT * FROM blocks WHERE id = ?', [id]);
-
-    if (block.length === 0) {
-      throw new Error('Block not found');
-    }
-
-    // Save history BEFORE deletion
-    await connection.query(
-      'INSERT INTO block_history (page_id, block_id, block_data, operation, created_by) VALUES (?, ?, ?, ?, ?)',
-      [block[0].page_id, id, JSON.stringify(block[0]), 'delete', 'system']
-    );
-
-    const [result] = await connection.query('DELETE FROM blocks WHERE id = ?', [id]);
-
-    await connection.commit();
-    return result.affectedRows > 0;
-
-  } catch (error) {
-    await connection.rollback();
-    throw error;
-  } finally {
-    connection.release();
-  }
-}
-
-  // Save blocks with history
-  static async saveBlocks(pageId, blocks, userId = 'system', saveSnapshot = true) {
+  static async delete(id, userId = null) {
     const connection = await pool.getConnection();
 
     try {
       await connection.beginTransaction();
 
-      // Get current blocks before update
+      let query = 'SELECT * FROM blocks WHERE id = ?';
+      const params = [id];
+      
+      if (userId) {
+        query += ' AND user_id = ?';
+        params.push(userId);
+      }
+
+      const [block] = await connection.query(query, params);
+
+      if (block.length === 0) {
+        throw new Error('Block not found');
+      }
+
+      // Save history
+      await connection.query(
+        'INSERT INTO block_history (user_id, page_id, block_id, block_data, operation, created_by) VALUES (?, ?, ?, ?, ?, ?)',
+        [block[0].user_id, block[0].page_id, id, JSON.stringify(block[0]), 'delete', block[0].user_id]
+      );
+
+      let deleteQuery = 'DELETE FROM blocks WHERE id = ?';
+      const deleteParams = [id];
+      
+      if (userId) {
+        deleteQuery += ' AND user_id = ?';
+        deleteParams.push(userId);
+      }
+
+      const [result] = await connection.query(deleteQuery, deleteParams);
+      await connection.commit();
+      return result.affectedRows > 0;
+
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  static async saveBlocks(pageId, blocks, userId, saveSnapshot = true) {
+    const connection = await pool.getConnection();
+
+    try {
+      await connection.beginTransaction();
+
+      if (!userId) {
+        throw new Error('user_id is required');
+      }
+
+      // Get current blocks
       const [currentBlocks] = await connection.query(
-        'SELECT * FROM blocks WHERE page_id = ? ORDER BY order_index ASC',
-        [pageId]
+        'SELECT * FROM blocks WHERE page_id = ? AND user_id = ? ORDER BY order_index ASC',
+        [pageId, userId]
       );
 
       // Delete existing blocks
-      await connection.query('DELETE FROM blocks WHERE page_id = ?', [pageId]);
+      await connection.query('DELETE FROM blocks WHERE page_id = ? AND user_id = ?', [pageId, userId]);
 
       // Insert new blocks
       for (let i = 0; i < blocks.length; i++) {
         const block = blocks[i];
 
         await connection.query(
-          `INSERT INTO blocks (page_id, type, properties, format, parent_id, order_index)
+          `INSERT INTO blocks (user_id, page_id, type, properties, format, order_index)
            VALUES (?, ?, ?, ?, ?, ?)`,
           [
+            userId,
             pageId,
             block.type,
             JSON.stringify(block.properties || {}),
             JSON.stringify(block.format || {}),
-            block.parent_id || null,
             i
           ]
         );
@@ -198,11 +237,12 @@ export class Block {
 
       await connection.commit();
 
-      // Save snapshot to history if requested
+      // Save snapshot
       if (saveSnapshot) {
         setTimeout(async () => {
           try {
             await BlockHistory.create({
+              user_id: userId,
               page_id: pageId,
               block_data: {
                 previous: currentBlocks,
@@ -223,10 +263,9 @@ export class Block {
         }, 100);
       }
 
-      // Get all newly created blocks
       const [newBlocks] = await connection.query(
-        'SELECT * FROM blocks WHERE page_id = ? ORDER BY order_index ASC',
-        [pageId]
+        'SELECT * FROM blocks WHERE page_id = ? AND user_id = ? ORDER BY order_index ASC',
+        [pageId, userId]
       );
 
       return { success: true, count: blocks.length, blocks: newBlocks };
@@ -238,16 +277,20 @@ export class Block {
     }
   }
 
-  static async updateBlocks(pageId, blocks, userId = 'system', saveSnapshot = true) {
+  static async updateBlocks(pageId, blocks, userId, saveSnapshot = true) {
     const connection = await pool.getConnection();
 
     try {
       await connection.beginTransaction();
 
-      // Get existing blocks for this page
+      if (!userId) {
+        throw new Error('user_id is required');
+      }
+
+      // Get existing blocks
       const [existingBlocks] = await connection.query(
-        'SELECT * FROM blocks WHERE page_id = ? ORDER BY order_index ASC',
-        [pageId]
+        'SELECT * FROM blocks WHERE page_id = ? AND user_id = ? ORDER BY order_index ASC',
+        [pageId, userId]
       );
 
       const existingBlockIds = existingBlocks.map(b => b.id);
@@ -258,8 +301,8 @@ export class Block {
       if (blocksToDelete.length > 0) {
         const placeholders = blocksToDelete.map(() => '?').join(',');
         await connection.query(
-          `DELETE FROM blocks WHERE page_id = ? AND id IN (${placeholders})`,
-          [pageId, ...blocksToDelete]
+          `DELETE FROM blocks WHERE page_id = ? AND user_id = ? AND id IN (${placeholders})`,
+          [pageId, userId, ...blocksToDelete]
         );
       }
 
@@ -270,38 +313,38 @@ export class Block {
         if (block.id) {
           // Check if block exists
           const [existing] = await connection.query(
-            'SELECT * FROM blocks WHERE id = ? AND page_id = ?',
-            [block.id, pageId]
+            'SELECT * FROM blocks WHERE id = ? AND page_id = ? AND user_id = ?',
+            [block.id, pageId, userId]
           );
 
           if (existing.length > 0) {
             // Update existing block
             await connection.query(
               `UPDATE blocks 
-               SET type = ?, properties = ?, format = ?, parent_id = ?, order_index = ?
-               WHERE id = ? AND page_id = ?`,
+               SET type = ?, properties = ?, format = ?, order_index = ?
+               WHERE id = ? AND page_id = ? AND user_id = ?`,
               [
                 block.type,
                 JSON.stringify(block.properties || {}),
                 JSON.stringify(block.format || {}),
-                block.parent_id || null,
                 i,
                 block.id,
-                pageId
+                pageId,
+                userId
               ]
             );
           } else {
             // Insert block with provided ID
             await connection.query(
-              `INSERT INTO blocks (id, page_id, type, properties, format, parent_id, order_index)
+              `INSERT INTO blocks (id, user_id, page_id, type, properties, format, order_index)
                VALUES (?, ?, ?, ?, ?, ?, ?)`,
               [
                 block.id,
+                userId,
                 pageId,
                 block.type,
                 JSON.stringify(block.properties || {}),
                 JSON.stringify(block.format || {}),
-                block.parent_id || null,
                 i
               ]
             );
@@ -309,14 +352,14 @@ export class Block {
         } else {
           // Insert new block without ID
           const [result] = await connection.query(
-            `INSERT INTO blocks (page_id, type, properties, format, parent_id, order_index)
+            `INSERT INTO blocks (user_id, page_id, type, properties, format, order_index)
              VALUES (?, ?, ?, ?, ?, ?)`,
             [
+              userId,
               pageId,
               block.type,
               JSON.stringify(block.properties || {}),
               JSON.stringify(block.format || {}),
-              block.parent_id || null,
               i
             ]
           );
@@ -327,17 +370,16 @@ export class Block {
 
       await connection.commit();
 
-      // Save history AFTER committing to avoid deadlocks
+      // Save history
       try {
-        // Get updated blocks for history
         const [updatedBlocks] = await connection.query(
-          'SELECT * FROM blocks WHERE page_id = ? ORDER BY order_index ASC',
-          [pageId]
+          'SELECT * FROM blocks WHERE page_id = ? AND user_id = ? ORDER BY order_index ASC',
+          [pageId, userId]
         );
 
-        // Save snapshot to history if requested
         if (saveSnapshot) {
           await BlockHistory.create({
+            user_id: userId,
             page_id: pageId,
             block_data: {
               previous: existingBlocks,
@@ -355,14 +397,12 @@ export class Block {
           });
         }
       } catch (historyError) {
-        console.error('Failed to save history (non-critical):', historyError);
-        // Don't throw - history is important but shouldn't break the main operation
+        console.error('Failed to save history:', historyError);
       }
 
-      // Get updated blocks for response
       const [updatedBlocks] = await connection.query(
-        'SELECT * FROM blocks WHERE page_id = ? ORDER BY order_index ASC',
-        [pageId]
+        'SELECT * FROM blocks WHERE page_id = ? AND user_id = ? ORDER BY order_index ASC',
+        [pageId, userId]
       );
 
       return {
@@ -377,5 +417,4 @@ export class Block {
       connection.release();
     }
   }
-  
 }

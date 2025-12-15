@@ -1,25 +1,30 @@
 import { pool } from '../config/database.js';
 
 export class BlockHistory {
-  // Save block history
   static async create(historyData) {
     try {
       const connection = await pool.getConnection();
       
       try {
+        // Require user_id
+        if (!historyData.user_id) {
+          throw new Error('user_id is required');
+        }
+
         const query = `
           INSERT INTO block_history 
-          (page_id, block_id, block_data, operation, snapshot_data, created_by)
-          VALUES (?, ?, ?, ?, ?, ?)
+          (user_id, page_id, block_id, block_data, operation, snapshot_data, created_by)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
         `;
         
         const values = [
+          historyData.user_id,
           historyData.page_id,
           historyData.block_id || null,
           JSON.stringify(historyData.block_data || {}),
           historyData.operation || 'update',
           JSON.stringify(historyData.snapshot_data || {}),
-          historyData.created_by || 'system'
+          historyData.created_by || historyData.user_id
         ];
         
         const [result] = await connection.query(query, values);
@@ -28,12 +33,11 @@ export class BlockHistory {
         connection.release();
       }
     } catch (error) {
-      console.error('History save failed (non-critical):', error.message);
+      console.error('History save failed:', error.message);
       return null;
     }
   }
   
-  // Helper function to safely parse JSON
   static safeParseJSON(data) {
     if (!data) return {};
     if (typeof data === 'object') return data;
@@ -47,8 +51,7 @@ export class BlockHistory {
     return {};
   }
   
-  // Get page history with pagination
-  static async getPageHistory(pageId, page = 1, limit = 20) {
+  static async getPageHistory(pageId, userId, page = 1, limit = 20) {
     try {
       const offset = (page - 1) * limit;
       
@@ -60,15 +63,14 @@ export class BlockHistory {
         FROM block_history h
         LEFT JOIN blocks b ON h.block_id = b.id
         LEFT JOIN pages p ON h.page_id = p.id
-        WHERE h.page_id = ?
+        WHERE h.page_id = ? AND h.user_id = ?
         ORDER BY h.created_at DESC
         LIMIT ? OFFSET ?
-      `, [pageId, limit, offset]);
+      `, [pageId, userId, limit, offset]);
       
-      // Get total count
       const [countRows] = await pool.query(
-        'SELECT COUNT(*) as total FROM block_history WHERE page_id = ?',
-        [pageId]
+        'SELECT COUNT(*) as total FROM block_history WHERE page_id = ? AND user_id = ?',
+        [pageId, userId]
       );
       
       return {
@@ -94,8 +96,7 @@ export class BlockHistory {
     }
   }
   
-  // Get ALL timeline entries for a page
-  static async getTimelineEntries(pageId, limit = 50) {
+  static async getTimelineEntries(pageId, userId, limit = 50) {
     try {
       const [rows] = await pool.query(`
         SELECT 
@@ -108,12 +109,12 @@ export class BlockHistory {
           b.type as block_type
         FROM block_history h
         LEFT JOIN blocks b ON h.block_id = b.id
-        WHERE h.page_id = ?
+        WHERE h.page_id = ? AND h.user_id = ?
           AND (h.snapshot_data IS NOT NULL OR h.block_data IS NOT NULL)
           AND (h.snapshot_data != '{}' OR h.block_data != '{}')
         ORDER BY h.created_at DESC
         LIMIT ?
-      `, [pageId, limit]);
+      `, [pageId, userId, limit]);
       
       if (rows.length === 0) return [];
       
@@ -124,7 +125,6 @@ export class BlockHistory {
         let previewContent = '';
         let blockTypes = [];
         
-        // Extract preview from snapshot
         if (snapshotData && snapshotData.blocks) {
           blockTypes = snapshotData.blocks.slice(0, 3).map(b => b.type);
           if (snapshotData.blocks[0] && snapshotData.blocks[0].properties) {
@@ -133,9 +133,7 @@ export class BlockHistory {
               previewContent = props.title[0][0] || '';
             }
           }
-        }
-        // Extract preview from block data
-        else if (blockData) {
+        } else if (blockData) {
           if (blockData.new) {
             const props = blockData.new.properties || {};
             if (props.title && Array.isArray(props.title) && props.title[0]) {
@@ -173,10 +171,8 @@ export class BlockHistory {
     }
   }
   
-  // Get page at specific history point
-  static async getPageAtHistory(pageId, historyId) {
+  static async getPageAtHistory(pageId, historyId, userId) {
     try {
-      // Get the history entry
       const [historyRows] = await pool.query(`
         SELECT 
           h.*,
@@ -185,8 +181,8 @@ export class BlockHistory {
           p.cover_image as page_cover
         FROM block_history h
         LEFT JOIN pages p ON h.page_id = p.id
-        WHERE h.id = ? AND h.page_id = ?
-      `, [historyId, pageId]);
+        WHERE h.id = ? AND h.page_id = ? AND h.user_id = ?
+      `, [historyId, pageId, userId]);
       
       if (historyRows.length === 0) {
         return null;
@@ -198,16 +194,13 @@ export class BlockHistory {
       let blocks = [];
       let isFullSnapshot = false;
       
-      // If it's a snapshot, use those blocks
       if (snapshotData && snapshotData.blocks) {
         blocks = snapshotData.blocks;
         isFullSnapshot = true;
-      }
-      // If it's a block update, we need current blocks (for now)
-      else {
+      } else {
         const [currentBlocks] = await pool.query(
-          'SELECT * FROM blocks WHERE page_id = ? ORDER BY order_index ASC',
-          [pageId]
+          'SELECT * FROM blocks WHERE page_id = ? AND user_id = ? ORDER BY order_index ASC',
+          [pageId, userId]
         );
         blocks = currentBlocks;
       }
@@ -233,8 +226,7 @@ export class BlockHistory {
     }
   }
   
-  // Get recent snapshots (for sidebar)
-  static async getRecentSnapshots(pageId, limit = 20) {
+  static async getRecentSnapshots(pageId, userId, limit = 20) {
     try {
       const [rows] = await pool.query(`
         SELECT 
@@ -243,12 +235,12 @@ export class BlockHistory {
           h.operation,
           h.snapshot_data
         FROM block_history h
-        WHERE h.page_id = ?
+        WHERE h.page_id = ? AND h.user_id = ?
           AND h.snapshot_data IS NOT NULL
           AND h.snapshot_data != '{}'
         ORDER BY h.created_at DESC
         LIMIT ?
-      `, [pageId, limit]);
+      `, [pageId, userId, limit]);
 
       return rows.map(row => ({
         ...row,
@@ -261,8 +253,7 @@ export class BlockHistory {
     }
   }
   
-  // Get specific history entry
-  static async getHistoryById(historyId) {
+  static async getHistoryById(historyId, userId) {
     try {
       const [rows] = await pool.query(`
         SELECT 
@@ -272,8 +263,8 @@ export class BlockHistory {
         FROM block_history h
         LEFT JOIN blocks b ON h.block_id = b.id
         LEFT JOIN pages p ON h.page_id = p.id
-        WHERE h.id = ?
-      `, [historyId]);
+        WHERE h.id = ? AND h.user_id = ?
+      `, [historyId, userId]);
       
       if (rows.length === 0) return null;
       
@@ -288,17 +279,20 @@ export class BlockHistory {
     }
   }
   
-  // Cleanup old history
-  static async cleanupOldHistory(daysToKeep = 30) {
+  static async cleanupOldHistory(daysToKeep = 30, userId = null) {
     try {
       const cutoffDate = new Date();
       cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
       
-      const [result] = await pool.query(
-        'DELETE FROM block_history WHERE created_at < ?',
-        [cutoffDate]
-      );
+      let query = 'DELETE FROM block_history WHERE created_at < ?';
+      const params = [cutoffDate];
       
+      if (userId) {
+        query += ' AND user_id = ?';
+        params.push(userId);
+      }
+      
+      const [result] = await pool.query(query, params);
       return result.affectedRows;
     } catch (error) {
       console.error('Failed to cleanup old history:', error);

@@ -1,14 +1,40 @@
 import { BlockHistory } from '../models/BlockHistory.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
+import { Page } from '../models/Page.js';
 
 export const blockHistoryController = {
   // Get page history
   getPageHistory: asyncHandler(async (req, res) => {
     const { pageId } = req.params;
     const { page = 1, limit = 20 } = req.query;
+    const userId = req.user?.id;
+    
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        error: 'Authentication required'
+      });
+    }
+    
+    // Check if page belongs to user
+    const pageExists = await Page.findById(pageId);
+    if (!pageExists) {
+      return res.status(404).json({
+        success: false,
+        error: 'Page not found'
+      });
+    }
+    
+    if (pageExists.user_id !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'Access denied'
+      });
+    }
     
     const history = await BlockHistory.getPageHistory(
       pageId, 
+      userId,
       parseInt(page), 
       parseInt(limit)
     );
@@ -23,10 +49,33 @@ export const blockHistoryController = {
   getTimelineEntries: asyncHandler(async (req, res) => {
     const { pageId } = req.params;
     const { limit = 50 } = req.query;
+    const userId = req.user?.id;
     
-    const entries = await BlockHistory.getTimelineEntries(pageId, parseInt(limit));
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        error: 'Authentication required'
+      });
+    }
     
-    // Format for display
+    // Check if page belongs to user
+    const pageExists = await Page.findById(pageId);
+    if (!pageExists) {
+      return res.status(404).json({
+        success: false,
+        error: 'Page not found'
+      });
+    }
+    
+    if (pageExists.user_id !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'Access denied'
+      });
+    }
+    
+    const entries = await BlockHistory.getTimelineEntries(pageId, userId, parseInt(limit));
+    
     const formattedEntries = entries.map(entry => {
       const date = new Date(entry.created_at);
       
@@ -60,8 +109,32 @@ export const blockHistoryController = {
   // Get page at specific history point
   getPageAtHistory: asyncHandler(async (req, res) => {
     const { pageId, historyId } = req.params;
+    const userId = req.user?.id;
     
-    const pageData = await BlockHistory.getPageAtHistory(pageId, historyId);
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        error: 'Authentication required'
+      });
+    }
+    
+    // Check if page belongs to user
+    const pageExists = await Page.findById(pageId);
+    if (!pageExists) {
+      return res.status(404).json({
+        success: false,
+        error: 'Page not found'
+      });
+    }
+    
+    if (pageExists.user_id !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'Access denied'
+      });
+    }
+    
+    const pageData = await BlockHistory.getPageAtHistory(pageId, historyId, userId);
     
     if (!pageData) {
       return res.status(404).json({
@@ -79,10 +152,17 @@ export const blockHistoryController = {
   // Restore to specific snapshot
   restoreSnapshot: asyncHandler(async (req, res) => {
     const { historyId } = req.params;
-    const userId = req.user?.id || 'system';
+    const userId = req.user?.id;
+    
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        error: 'Authentication required'
+      });
+    }
     
     // Get the history entry
-    const history = await BlockHistory.getHistoryById(historyId);
+    const history = await BlockHistory.getHistoryById(historyId, userId);
     
     if (!history) {
       return res.status(404).json({
@@ -96,6 +176,15 @@ export const blockHistoryController = {
       return res.status(400).json({
         success: false,
         error: 'This is not a snapshot entry'
+      });
+    }
+    
+    // Check if page belongs to user
+    const pageExists = await Page.findById(history.page_id);
+    if (!pageExists || pageExists.user_id !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'Access denied'
       });
     }
     
@@ -114,8 +203,32 @@ export const blockHistoryController = {
   getRecentSnapshots: asyncHandler(async (req, res) => {
     const { pageId } = req.params;
     const { limit = 20 } = req.query;
+    const userId = req.user?.id;
     
-    const snapshots = await BlockHistory.getRecentSnapshots(pageId, parseInt(limit));
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        error: 'Authentication required'
+      });
+    }
+    
+    // Check if page belongs to user
+    const pageExists = await Page.findById(pageId);
+    if (!pageExists) {
+      return res.status(404).json({
+        success: false,
+        error: 'Page not found'
+      });
+    }
+    
+    if (pageExists.user_id !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'Access denied'
+      });
+    }
+    
+    const snapshots = await BlockHistory.getRecentSnapshots(pageId, userId, parseInt(limit));
     
     const formattedSnapshots = snapshots.map(snapshot => {
       const date = new Date(snapshot.created_at);
@@ -136,11 +249,19 @@ export const blockHistoryController = {
     });
   }),
   
-  // Cleanup old history
+  // Cleanup old history for current user
   cleanupHistory: asyncHandler(async (req, res) => {
     const { days = 30 } = req.query;
+    const userId = req.user?.id;
     
-    const deletedCount = await BlockHistory.cleanupOldHistory(parseInt(days));
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        error: 'Authentication required'
+      });
+    }
+    
+    const deletedCount = await BlockHistory.cleanupOldHistory(parseInt(days), userId);
     
     res.json({
       success: true,

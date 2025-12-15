@@ -6,13 +6,13 @@ import { authMiddleware } from '../middleware/authMiddleware.js';
 const router = express.Router();
 
 // Public routes (accessible without authentication)
-router.get('/:id', asyncHandler(pageController.getPage));
-router.get('/search', asyncHandler(pageController.searchPages));
-router.get('/slug/:slug', asyncHandler(pageController.getPageBySlug));
+
 
 // Protected routes (require authentication)
+router.get('/:id', asyncHandler(pageController.getPage));
 router.use(authMiddleware); // Apply auth to all routes below
-
+router.get('/search', asyncHandler(pageController.searchPages));
+router.get('/slug/:slug', asyncHandler(pageController.getPageBySlug));
 // GET /api/pages - Get all pages (protected)
 router.get('/', asyncHandler(pageController.getAllPages));
 

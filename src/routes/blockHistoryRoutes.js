@@ -1,12 +1,12 @@
 import express from 'express';
 import { blockHistoryController } from '../controllers/blockHistoryController.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
-// import { authMiddleware } from '../middleware/authMiddleware.js';
+import { authMiddleware, adminMiddleware } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
 // All routes require authentication
-// router.use(authMiddleware);
+router.use(authMiddleware);
 
 // GET /api/history/page/:pageId - Get page history
 router.get('/page/:pageId', asyncHandler(blockHistoryController.getPageHistory));
@@ -23,7 +23,7 @@ router.get('/page/:pageId/recent', asyncHandler(blockHistoryController.getRecent
 // POST /api/history/restore/:historyId - Restore to snapshot
 router.post('/restore/:historyId', asyncHandler(blockHistoryController.restoreSnapshot));
 
-// DELETE /api/history/cleanup - Cleanup old history (admin)
-router.delete('/cleanup', asyncHandler(blockHistoryController.cleanupHistory));
+// DELETE /api/history/cleanup - Cleanup old history (admin only)
+router.delete('/cleanup', adminMiddleware, asyncHandler(blockHistoryController.cleanupHistory));
 
 export default router;

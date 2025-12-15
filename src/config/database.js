@@ -57,8 +57,7 @@ const initTables = async (connection) => {
         cover_image TEXT,
         is_published BOOLEAN DEFAULT TRUE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        FOREIGN KEY (parent_id) REFERENCES pages(id) ON DELETE SET NULL
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
       )
     `);
 
@@ -97,6 +96,24 @@ const initTables = async (connection) => {
     )`
     );
 
+    await connection.query(`
+        CREATE TABLE IF NOT EXISTS users (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        username VARCHAR(255) NOT NULL UNIQUE,
+        email VARCHAR(255) NOT NULL UNIQUE,
+        password VARCHAR(255) NOT NULL,
+        display_name VARCHAR(255),
+        avatar_url TEXT,
+        is_active BOOLEAN DEFAULT TRUE,
+        is_admin BOOLEAN DEFAULT FALSE,
+        last_login TIMESTAMP NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_username (username),
+        INDEX idx_email (email)
+      )
+    `);
+
     // Create indexes
     await connection.query(`CREATE INDEX IF NOT EXISTS idx_pages_slug ON pages(slug)`);
     await connection.query(`CREATE INDEX IF NOT EXISTS idx_pages_parent_id ON pages(parent_id)`);
@@ -104,7 +121,8 @@ const initTables = async (connection) => {
     await connection.query(`CREATE INDEX IF NOT EXISTS idx_blocks_page_id ON blocks(page_id)`);
     await connection.query(`CREATE INDEX IF NOT EXISTS idx_blocks_parent_id ON blocks(parent_id)`);
     await connection.query(`CREATE INDEX IF NOT EXISTS idx_blocks_order ON blocks(page_id, order_index)`);
-
+    await connection.query(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`);
+    await connection.query(`CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)`);
     console.log('✅ Database tables initialized');
   } catch (error) {
     console.error('❌ Table initialization error:', error.message);

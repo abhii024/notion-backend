@@ -11,8 +11,8 @@ import fs from 'fs';
 // Import routes
 import pageRoutes from './routes/pageRoutes.js';
 import blockRoutes from './routes/blockRoutes.js';
-import  blockHistoryRoutes  from './routes/blockHistoryRoutes.js';
-
+import blockHistoryRoutes  from './routes/blockHistoryRoutes.js';
+import authRoutes from './routes/authRoutes.js';
 // Import middleware
 import { errorHandler, notFound } from './middleware/errorHandler.js';
 import { upload, handleUploadError, getFileUrl } from './middleware/upload.js';
@@ -194,6 +194,7 @@ app.use(handleUploadError);
 app.use('/api/pages', pageRoutes);
 app.use('/api/blocks', blockRoutes);
 app.use('/api/history', blockHistoryRoutes);
+app.use('/api/auth', authRoutes);
 
 // 404 handler
 app.use(notFound);

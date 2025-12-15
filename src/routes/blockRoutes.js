@@ -1,8 +1,12 @@
 import express from 'express';
 import { blockController } from '../controllers/blockController.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
+import { authMiddleware } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
+
+// All block routes require authentication
+router.use(authMiddleware);
 
 // GET /api/blocks/page/:pageId - Get blocks for a page
 router.get('/page/:pageId', asyncHandler(blockController.getPageBlocks));

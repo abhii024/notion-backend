@@ -5,8 +5,9 @@ import { BlockHistory } from '../models/BlockHistory.js';
 export const pageController = {
   // Create a new page
   createPage: asyncHandler(async (req, res) => {
-    const { title, content, parent_id, icon, cover_image } = req.body;
-    
+    const { title, content, icon, cover_image } = req.body;
+    const parent_id = req.user?.id;
+    console.log("parent_id",parent_id)
     const page = await Page.create({
       title: title || 'Untitled',
       content: content || {},
@@ -23,8 +24,8 @@ export const pageController = {
 
   // Get all pages
   getAllPages: asyncHandler(async (req, res) => {
-    const { include_unpublished, parent_id } = req.query;
-    
+    const { include_unpublished } = req.query;
+    const parent_id = req.user?.id;
     let pages;
     console.log("parent_id",parent_id)
     console.log("parent_id",include_unpublished)

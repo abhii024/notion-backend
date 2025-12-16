@@ -1,6 +1,7 @@
 import { pool } from '../config/database.js';
 
 export class Page {
+  // Generate slug from title
   static generateSlug(title) {
     if (!title) return 'untitled';
     
@@ -15,14 +16,20 @@ export class Page {
     return baseSlug;
   }
 
+  // Get unique slug
   static async getUniqueSlug(baseSlug, userId, excludeId = null) {
     let slug = baseSlug;
     let counter = 1;
     const maxAttempts = 100;
     
     while (counter <= maxAttempts) {
-      let query = 'SELECT COUNT(*) as count FROM pages WHERE slug = ? AND user_id = ?';
-      const params = [slug, userId];
+      let query = 'SELECT COUNT(*) as count FROM pages WHERE slug = ?';
+      const params = [slug];
+      
+      if (userId) {
+        query += ' AND user_id = ?';
+        params.push(userId);
+      }
       
       if (excludeId) {
         query += ' AND id != ?';
@@ -35,22 +42,14 @@ export class Page {
         return slug;
       }
       
-      if (counter === 1) {
-        slug = `${baseSlug}-${counter + 1}`;
-      } else {
-        const matches = slug.match(/^(.+)-(\d+)$/);
-        if (matches) {
-          slug = `${matches[1]}-${parseInt(matches[2]) + 1}`;
-        } else {
-          slug = `${baseSlug}-${counter + 1}`;
-        }
-      }
+      slug = `${baseSlug}-${counter}`;
       counter++;
     }
     
     throw new Error(`Could not generate unique slug after ${maxAttempts} attempts`);
   }
 
+  // Create page with slug
   static async create(pageData) {
     const connection = await pool.getConnection();
     
@@ -63,11 +62,11 @@ export class Page {
       }
       
       const baseSlug = this.generateSlug(pageData.title || 'Untitled');
-      const uniqueSlug = await this.getUniqueSlug(baseSlug, pageData.user_id, null);
+      const uniqueSlug = await this.getUniqueSlug(baseSlug, pageData.user_id);
       
       const query = `
-        INSERT INTO pages (user_id, title, slug, content, icon, cover_image)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO pages (user_id, title, slug, content, icon, cover_image, is_published)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
       `;
       
       const values = [
@@ -76,7 +75,8 @@ export class Page {
         uniqueSlug,
         JSON.stringify(pageData.content || {}),
         pageData.icon || '📄',
-        pageData.cover_image || null
+        pageData.cover_image || null,
+        pageData.is_published !== undefined ? pageData.is_published : true
       ];
 
       const [result] = await connection.query(query, values);
@@ -95,11 +95,23 @@ export class Page {
     }
   }
 
-  static async findById(id) {
-    const [rows] = await pool.query('SELECT * FROM pages WHERE id = ?', [id]);
-    return rows[0];
+  // Find page by ID
+  static async findById(id, userId = null) {
+    let query = 'SELECT * FROM pages WHERE id = ?';
+    const params = [id];
+    
+    if (userId) {
+      query += ' AND user_id = ?';
+      params.push(userId);
+    } else {
+      query += ' AND is_published = TRUE';
+    }
+    
+    const [rows] = await pool.query(query, params);
+    return rows[0] || null;
   }
 
+  // Find page by slug
   static async findBySlug(slug, userId = null) {
     let query = 'SELECT * FROM pages WHERE slug = ?';
     const params = [slug];
@@ -107,12 +119,31 @@ export class Page {
     if (userId) {
       query += ' AND user_id = ?';
       params.push(userId);
+    } else {
+      query += ' AND is_published = TRUE';
     }
     
     const [rows] = await pool.query(query, params);
-    return rows[0];
+    return rows[0] || null;
   }
 
+  // Get page ID from slug
+  static async getIdFromSlug(slug, userId = null) {
+    let query = 'SELECT id FROM pages WHERE slug = ?';
+    const params = [slug];
+    
+    if (userId) {
+      query += ' AND user_id = ?';
+      params.push(userId);
+    } else {
+      query += ' AND is_published = TRUE';
+    }
+    
+    const [rows] = await pool.query(query, params);
+    return rows[0] ? rows[0].id : null;
+  }
+
+  // Get all pages
   static async findAll(userId = null) {
     let query = 'SELECT * FROM pages';
     let params = [];
@@ -120,6 +151,8 @@ export class Page {
     if (userId) {
       query += ' WHERE user_id = ?';
       params.push(userId);
+    } else {
+      query += ' WHERE is_published = TRUE';
     }
     
     query += ' ORDER BY created_at DESC';
@@ -127,41 +160,40 @@ export class Page {
     return rows;
   }
 
-  static async update(id, updates) {
+  // Update page
+  static async update(id, updates, userId = null) {
     const connection = await pool.getConnection();
     
     try {
       await connection.beginTransaction();
       
-      // Get existing page to check user_id
-      const existingPage = await this.findById(id);
+      // Get existing page
+      const existingPage = await this.findById(id, userId);
       if (!existingPage) {
         throw new Error('Page not found');
       }
       
-      // Check if title is being updated
-      if (updates.title) {
+      // Update slug if title changed
+      if (updates.title && updates.title !== existingPage.title) {
         const baseSlug = this.generateSlug(updates.title);
         const uniqueSlug = await this.getUniqueSlug(baseSlug, existingPage.user_id, id);
         updates.slug = uniqueSlug;
       }
       
-      const fieldMappings = {
-        coverImage: 'cover_image'
-      };
-      
+      // Prepare fields for update
       const fields = [];
       const values = [];
       
-      Object.keys(updates).forEach(key => {
-        const dbColumn = fieldMappings[key] || key;
-        
-        if (dbColumn === 'content' && updates[key] !== undefined) {
-          fields.push(`${dbColumn} = ?`);
-          values.push(JSON.stringify(updates[key]));
-        } else if (updates[key] !== undefined) {
-          fields.push(`${dbColumn} = ?`);
-          values.push(updates[key]);
+      const allowedFields = ['title', 'slug', 'content', 'icon', 'cover_image', 'is_published'];
+      
+      allowedFields.forEach(field => {
+        if (updates[field] !== undefined) {
+          fields.push(`${field} = ?`);
+          if (field === 'content') {
+            values.push(JSON.stringify(updates[field]));
+          } else {
+            values.push(updates[field]);
+          }
         }
       });
       
@@ -169,15 +201,21 @@ export class Page {
         throw new Error('No fields to update');
       }
       
+      // Add WHERE conditions
       values.push(id);
-      const query = `UPDATE pages SET ${fields.join(', ')} WHERE id = ?`;
+      if (userId) {
+        values.push(userId);
+      }
+      
+      const whereClause = userId ? 'WHERE id = ? AND user_id = ?' : 'WHERE id = ?';
+      const query = `UPDATE pages SET ${fields.join(', ')}, updated_at = CURRENT_TIMESTAMP ${whereClause}`;
       
       await connection.query(query, values);
       
-      const [rows] = await connection.query('SELECT * FROM pages WHERE id = ?', [id]);
+      const updatedPage = await this.findById(id, userId);
       
       await connection.commit();
-      return rows[0];
+      return updatedPage;
       
     } catch (error) {
       await connection.rollback();
@@ -187,6 +225,7 @@ export class Page {
     }
   }
 
+  // Delete page
   static async delete(id, userId = null) {
     let query = 'DELETE FROM pages WHERE id = ?';
     const params = [id];
@@ -200,6 +239,7 @@ export class Page {
     return result.affectedRows > 0;
   }
 
+  // Search pages
   static async search(query, userId = null) {
     const searchTerm = `%${query}%`;
     let sql = 'SELECT * FROM pages WHERE (title LIKE ? OR slug LIKE ?)';
@@ -208,24 +248,13 @@ export class Page {
     if (userId) {
       sql += ' AND user_id = ?';
       params.push(userId);
+    } else {
+      sql += ' AND is_published = TRUE';
     }
     
     sql += ' ORDER BY created_at DESC';
     const [rows] = await pool.query(sql, params);
     return rows;
-  }
-
-  static async slugExists(slug, userId, excludeId = null) {
-    let query = 'SELECT COUNT(*) as count FROM pages WHERE slug = ? AND user_id = ?';
-    const params = [slug, userId];
-    
-    if (excludeId) {
-      query += ' AND id != ?';
-      params.push(excludeId);
-    }
-    
-    const [rows] = await pool.query(query, params);
-    return rows[0].count > 0;
   }
 
   // Get pages by user
@@ -235,5 +264,24 @@ export class Page {
       [userId]
     );
     return rows;
+  }
+
+  // Check if slug exists
+  static async slugExists(slug, userId = null, excludeId = null) {
+    let query = 'SELECT COUNT(*) as count FROM pages WHERE slug = ?';
+    const params = [slug];
+    
+    if (userId) {
+      query += ' AND user_id = ?';
+      params.push(userId);
+    }
+    
+    if (excludeId) {
+      query += ' AND id != ?';
+      params.push(excludeId);
+    }
+    
+    const [rows] = await pool.query(query, params);
+    return rows[0].count > 0;
   }
 }

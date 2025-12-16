@@ -181,8 +181,8 @@ export class BlockHistory {
           p.cover_image as page_cover
         FROM block_history h
         LEFT JOIN pages p ON h.page_id = p.id
-        WHERE h.id = ? AND h.page_id = ? AND h.user_id = ?
-      `, [historyId, pageId, userId]);
+        WHERE h.id = ? AND h.page_id = ? 
+      `, [historyId, pageId]);
       
       if (historyRows.length === 0) {
         return null;

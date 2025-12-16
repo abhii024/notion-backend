@@ -2,13 +2,11 @@ import { Page } from '../models/Page.js';
 import { Block } from '../models/Block.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { BlockHistory } from '../models/BlockHistory.js';
-import { pool } from '../config/database.js';
+
 export const pageController = {
   // Create a new page
   createPage: asyncHandler(async (req, res) => {
-    const { title, content, icon, cover_image } = req.body;
-
-    // Use authenticated user's ID
+    const { title, content, icon, cover_image, is_published } = req.body;
     const userId = req.user?.id;
 
     if (!userId) {
@@ -23,7 +21,8 @@ export const pageController = {
       content: content || {},
       user_id: userId,
       icon: icon || '📄',
-      cover_image: cover_image || null
+      cover_image: cover_image || null,
+      is_published: is_published !== undefined ? is_published : true
     });
 
     res.status(201).json({
@@ -32,33 +31,22 @@ export const pageController = {
     });
   }),
 
-  // Get all pages for the current user
+  // Get all pages
   getAllPages: asyncHandler(async (req, res) => {
     const { include_unpublished } = req.query;
     const userId = req.user?.id;
 
-    if (!userId) {
-      return res.status(401).json({
-        success: false,
-        error: 'Authentication required'
-      });
-    }
-
-    // Get pages for this user only
-    let pages;
-    if (include_unpublished === 'true') {
-      pages = await Page.findAll(userId);
-    } else {
-      // Filter by is_published
-      // const [rows] = await pool.query(
-      //   'SELECT * FROM pages WHERE user_id = ? AND is_published = TRUE ORDER BY created_at DESC',
-      //   [userId]
-      // );
-      const [rows] = await pool.query(
-        'SELECT * FROM pages WHERE is_published = TRUE ORDER BY created_at DESC'
-      );
-      pages = rows;
-    }
+    
+    // if (userId && include_unpublished === 'true') {
+    //   // User wants to see all their pages
+    //   pages = await Page.findByUser(userId);
+    // } else if (userId) {
+    //   // User sees their published pages
+    //   pages = await Page.findAll(userId);
+    // } else {
+      // Public - only published pages
+      let pages = await Page.findAll();
+    // }
 
     res.json({
       success: true,
@@ -70,33 +58,21 @@ export const pageController = {
   // Get single page by ID or slug
   getPage: asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const { include_blocks } = req.query;
-    const { historyId } = req.query;
+    const { include_blocks, historyId } = req.query;
     const userId = req.user?.id;
 
-    // if (!userId) {
-    //   return res.status(401).json({
-    //     success: false,
-    //     error: 'Authentication required'
-    //   });
-    // }
-
-    // Check if id is a slug (contains letters or hyphens)
     let page;
+    let pageId;
+    
+    // Determine if parameter is ID or slug
     if (isNaN(id)) {
-      // It's a slug - find by slug for this user
+      // It's a slug
       page = await Page.findBySlug(id, userId);
+      pageId = page ? page.id : null;
     } else {
-      // It's a numeric ID - find by ID (check user ownership)
-      page = await Page.findById(id);
-
-      // Check if page belongs to user
-      // if (page && page.user_id !== userId) {
-      //   return res.status(403).json({
-      //     success: false,
-      //     error: 'Access denied'
-      //   });
-      // }
+      // It's a numeric ID
+      page = await Page.findById(id, userId);
+      pageId = id;
     }
 
     if (!page) {
@@ -108,19 +84,71 @@ export const pageController = {
 
     let data = { page };
 
+    // Get blocks if requested
     if (historyId) {
-      // Fetch historical version
-      const pageData = await BlockHistory.getPageAtHistory(page.id, historyId, userId);
+      const pageData = await BlockHistory.getPageAtHistory(pageId, historyId, userId);
       data.blocks = pageData?.blocks || [];
     } else if (include_blocks === 'true' || include_blocks === undefined) {
-      // Fetch current blocks
-      const blocks = await Block.findByPageId(page.id, userId);
+      const blocks = await Block.findByPageId(pageId);
       data.blocks = blocks;
     }
 
     res.json({
       success: true,
       data
+    });
+  }),
+
+  // Get page by slug only
+  getPageBySlug: asyncHandler(async (req, res) => {
+    const { slug } = req.params;
+    const { include_blocks, historyId } = req.query;
+    const userId = req.user?.id;
+
+    const page = await Page.findBySlug(slug, userId);
+    
+    if (!page) {
+      return res.status(404).json({
+        success: false,
+        error: 'Page not found'
+      });
+    }
+
+    let data = { page };
+    console.log("include_blocks",include_blocks);
+    console.log("historyId",historyId);
+    if (historyId) {
+      const pageData = await BlockHistory.getPageAtHistory(page.id, historyId, userId);
+      console.log("pageData",pageData)
+      data.blocks = pageData?.blocks || [];
+    } else if (include_blocks === 'true' || include_blocks === undefined) {
+      const blocks = await Block.findByPageId(page.id);
+      data.blocks = blocks;
+    }
+
+    res.json({
+      success: true,
+      data
+    });
+  }),
+
+  // Get page ID from slug
+  getPageIdFromSlug: asyncHandler(async (req, res) => {
+    const { slug } = req.params;
+    const userId = req.user?.id;
+
+    const pageId = await Page.getIdFromSlug(slug, userId);
+    
+    if (!pageId) {
+      return res.status(404).json({
+        success: false,
+        error: 'Page not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: { id: pageId }
     });
   }),
 
@@ -137,8 +165,7 @@ export const pageController = {
       });
     }
 
-    // Check if page exists and belongs to user
-    const existingPage = await Page.findById(id);
+    const existingPage = await Page.findById(id, userId);
     if (!existingPage) {
       return res.status(404).json({
         success: false,
@@ -146,14 +173,7 @@ export const pageController = {
       });
     }
 
-    if (existingPage.user_id !== userId) {
-      return res.status(403).json({
-        success: false,
-        error: 'Access denied'
-      });
-    }
-
-    const updatedPage = await Page.update(id, updates);
+    const updatedPage = await Page.update(id, updates, userId);
 
     res.json({
       success: true,
@@ -188,17 +208,10 @@ export const pageController = {
     });
   }),
 
-  // Search pages for current user
+  // Search pages
   searchPages: asyncHandler(async (req, res) => {
     const { q } = req.query;
     const userId = req.user?.id;
-
-    if (!userId) {
-      return res.status(401).json({
-        success: false,
-        error: 'Authentication required'
-      });
-    }
 
     if (!q || q.trim().length < 2) {
       return res.status(400).json({
@@ -216,7 +229,7 @@ export const pageController = {
     });
   }),
 
-  // Get page tree (flat structure now since parent_id is removed)
+  // Get page tree
   getPageTree: asyncHandler(async (req, res) => {
     const userId = req.user?.id;
 
@@ -227,54 +240,18 @@ export const pageController = {
       });
     }
 
-    // Since parent_id is removed, return flat list of pages
-    const pages = await Page.findAll(userId);
+    const pages = await Page.findByUser(userId);
 
     res.json({
       success: true,
       data: pages.map(page => ({
         ...page,
-        children: [] // Empty children array for compatibility
+        children: []
       }))
     });
   }),
 
-  // Get page by slug for current user
-  getPageBySlug: asyncHandler(async (req, res) => {
-    const { slug } = req.params;
-    const { include_blocks } = req.query;
-    const userId = req.user?.id;
-
-    if (!userId) {
-      return res.status(401).json({
-        success: false,
-        error: 'Authentication required'
-      });
-    }
-
-    const page = await Page.findBySlug(slug, userId);
-
-    if (!page) {
-      return res.status(404).json({
-        success: false,
-        error: 'Page not found'
-      });
-    }
-
-    let data = { page };
-
-    if (include_blocks === 'true') {
-      const blocks = await Block.findByPageId(page.id, userId);
-      data.blocks = blocks;
-    }
-
-    res.json({
-      success: true,
-      data
-    });
-  }),
-
-  // Get pages by user (same as getAllPages but with explicit user_id)
+  // Get pages by user
   getPagesByUser: asyncHandler(async (req, res) => {
     const userId = req.user?.id;
 

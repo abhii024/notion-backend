@@ -144,21 +144,39 @@ export class Page {
   }
 
   // Get all pages
-  static async findAll(userId = null) {
-    let query = 'SELECT * FROM pages';
+  // static async findAll(userId = null) {
+  //   let query = 'SELECT * FROM pages';
+  //   let params = [];
+    
+  //   if (userId) {
+  //     query += ' WHERE user_id = ?';
+  //     params.push(userId);
+  //   } else {
+  //     query += ' WHERE is_published = TRUE';
+  //   }
+    
+  //   query += ' ORDER BY created_at DESC';
+  //   const [rows] = await pool.query(query, params);
+  //   return rows;
+  // }
+  static async findAll() {
+    let query = `
+      SELECT 
+        p.*,
+        u.username as user_name
+      FROM pages p
+      LEFT JOIN users u ON p.user_id = u.id
+    `;
     let params = [];
     
-    if (userId) {
-      query += ' WHERE user_id = ?';
-      params.push(userId);
-    } else {
-      query += ' WHERE is_published = TRUE';
-    }
+    query += ' WHERE p.is_published = TRUE';
     
-    query += ' ORDER BY created_at DESC';
+    query += ' ORDER BY p.created_at DESC';
+    
     const [rows] = await pool.query(query, params);
+    console.log("rows", rows);
     return rows;
-  }
+}
 
   // Update page
   static async update(id, updates, userId = null) {
